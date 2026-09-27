@@ -37,18 +37,35 @@ mezclar con el compose del VPS.
   "Usuario de RabbitMQ" abajo) -- **nunca** las credenciales que ya usa
   el chatbot del VPS.
 
-## Instalación (validación en PC propio)
+## Instalación
 
+Doble clic en `install-worker.exe` (compilado con `ps2exe` desde
+`install-worker.ps1`, ver más abajo). Si ya existe `.env` en la carpeta
+(caso normal: credenciales fijas del pool, generadas una vez), lo usa
+tal cual y no pide nada -- instalación de doble clic, sin intervención.
+Sin `.env`, pide la contraseña de forma interactiva (nunca en texto
+plano en el historial).
+
+Verifica Docker, construye la imagen del worker, importa el modelo de
+Ollama, arranca el contenedor, y verifica en el log real que el
+consumer confirmó conexión (`x-priority=10`) -- no se conforma con
+"container running".
+
+Uso directo del script (equivalente, para depurar):
 ```powershell
 .\install-worker.ps1 -RabbitMqHost 100.116.197.118
 ```
 
-Pide la contraseña del usuario `techo360-worker` de forma interactiva
-(no queda en el historial de PowerShell). Ver `install-worker.ps1` para
-el detalle de cada paso; en resumen: verifica Docker, construye la
-imagen del worker, importa el modelo de Ollama, genera `.env`, arranca
-el contenedor, y verifica en el log real que el consumer confirmó
-conexión (`x-priority=10`) -- no se conforma con "container running".
+### Compilar el .exe
+
+```powershell
+Install-Module ps2exe -Scope CurrentUser  # una sola vez
+Invoke-ps2exe -inputFile install-worker.ps1 -outputFile install-worker.exe -title "Techo 360 - Worker de Chatbot" -requireAdmin
+```
+
+`-requireAdmin` porque instalar Docker Desktop / manejar contenedores
+requiere privilegios elevados. El `.exe` no se commitea (ver
+`.gitignore`) -- se recompila desde el script o se distribuye aparte.
 
 `RABBITMQ_HOST` es el **único** valor pensado para cambiar entre esta
 prueba (IP de Tailscale del VPS) y el despliegue final de laboratorio

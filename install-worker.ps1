@@ -40,10 +40,39 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$RepoRoot = $PSScriptRoot
+# $PSScriptRoot no es confiable dentro de un .exe compilado con ps2exe
+# -- se resuelve al ejecutable real (MainModule) en ese caso.
+$RepoRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -Parent }
 $ChatbotRepo = Join-Path (Split-Path $RepoRoot -Parent) "techo360-chatbot"
 
 function Write-Step($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Cyan }
+
+# Bajo ps2exe (a diferencia de correr el .ps1 suelto), la salida de
+# progreso que docker/winget escriben en stderr se propaga como
+# ErrorRecord de PowerShell -- con $ErrorActionPreference="Stop" eso
+# aborta el script aunque el comando en realidad haya tenido exito
+# (confirmado real: "Image ... Building" abortaba la instalacion desde
+# el .exe compilado, nunca desde el .ps1 directo). Se corren los
+# comandos nativos con esta funcion: preferencia de error local en
+# Continue, y se revisa $LASTEXITCODE explicitamente en vez de confiar
+# en el stream de error.
+function Invoke-Native {
+    # $ArgList, NO $Args -- ese nombre choca con la variable automatica
+    # $args de PowerShell y se comporta distinto entre el .ps1 suelto y
+    # el .exe compilado con ps2exe (confirmado real: bajo el .exe,
+    # "docker" recibia cero argumentos y solo imprimia su ayuda general).
+    param([string]$Exe, [string[]]$ArgList, [string]$ErrorMessage)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $Exe @ArgList 2>&1 | ForEach-Object { Write-Host $_ }
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "$ErrorMessage (exit code $LASTEXITCODE)"
+    }
+}
 
 # ------------------------------------------------------------
 # 1. Docker
@@ -58,16 +87,15 @@ if (Test-Path (Join-Path $dockerBin "docker.exe")) {
 $dockerCmd = Get-Command docker -ErrorAction SilentlyContinue
 if (-not $dockerCmd) {
     Write-Host "Docker no encontrado. Instalando Docker Desktop via winget..."
-    winget install --id Docker.DockerDesktop -e --accept-package-agreements --accept-source-agreements
+    Invoke-Native winget @("install", "--id", "Docker.DockerDesktop", "-e", "--accept-package-agreements", "--accept-source-agreements") "No se pudo instalar Docker Desktop con winget"
     throw "Docker Desktop se acaba de instalar: reinicia la maquina/terminal y vuelve a correr este script (el primer arranque de Docker Desktop requiere reinicio de sesion en Windows)."
 }
 
-try {
-    docker version --format '{{.Server.Version}}' | Out-Null
-} catch {
+$dockerVersion = docker version --format '{{.Server.Version}}' 2>$null
+if (-not $dockerVersion) {
     throw "Docker esta instalado pero el motor no responde. Abre Docker Desktop manualmente, espera a que quede 'Running' y vuelve a correr este script."
 }
-Write-Host "Docker OK: $(docker version --format '{{.Server.Version}}')"
+Write-Host "Docker OK: $dockerVersion"
 
 # ------------------------------------------------------------
 # 2. Repo hermano techo360-chatbot (mismo codigo/imagen, sin tocarlo)
@@ -79,20 +107,25 @@ if (-not (Test-Path $ChatbotRepo)) {
 Write-Host "Encontrado: $ChatbotRepo"
 
 # ------------------------------------------------------------
-# 3. Password (nunca en texto plano en el historial)
+# 3-4. .env: si ya viene generado junto al instalador (caso normal de
+# laboratorio -- credenciales fijas para todo el pool), se usa tal
+# cual y no se pide nada. Solo se pregunta la password si hace falta
+# generarlo de cero (ej. primera vez en una maquina nueva sin .env).
 # ------------------------------------------------------------
-if (-not $RabbitMqPassword) {
-    $RabbitMqPassword = Read-Host -AsSecureString "Password del usuario RabbitMQ '$RabbitMqUser'"
-}
-$bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($RabbitMqPassword)
-$plainPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
-[System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+$envPath = Join-Path $RepoRoot ".env"
+if (Test-Path $envPath) {
+    Write-Step ".env existente detectado, se usa tal cual"
+    Write-Host "Encontrado: $envPath (no se pide password, no se modifica)"
+} else {
+    Write-Step "Generando .env"
+    if (-not $RabbitMqPassword) {
+        $RabbitMqPassword = Read-Host -AsSecureString "Password del usuario RabbitMQ '$RabbitMqUser'"
+    }
+    $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($RabbitMqPassword)
+    $plainPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+    [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
 
-# ------------------------------------------------------------
-# 4. Generar .env (nunca se commitea, ver .gitignore)
-# ------------------------------------------------------------
-Write-Step "Generando .env"
-$envContent = @"
+    $envContent = @"
 RABBITMQ_HOST=$RabbitMqHost
 RABBITMQ_PORT=$RabbitMqPort
 RABBITMQ_USER=$RabbitMqUser
@@ -100,9 +133,10 @@ RABBITMQ_PASSWORD=$plainPassword
 OLLAMA_MODEL=$OllamaModel
 CHATBOT_CONSUMER_PRIORITY=10
 "@
-Set-Content -Path (Join-Path $RepoRoot ".env") -Value $envContent -NoNewline
-$plainPassword = $null
-Write-Host ".env generado en $RepoRoot\.env"
+    Set-Content -Path $envPath -Value $envContent -NoNewline
+    $plainPassword = $null
+    Write-Host ".env generado en $envPath"
+}
 
 # ------------------------------------------------------------
 # 5. Construir imagen y arrancar
@@ -110,8 +144,8 @@ Write-Host ".env generado en $RepoRoot\.env"
 Write-Step "Construyendo imagen del worker (misma imagen de techo360-chatbot)"
 Push-Location $RepoRoot
 try {
-    docker compose -f docker-compose.worker.yml build
-    docker compose -f docker-compose.worker.yml up -d ollama
+    Invoke-Native docker @("compose", "-f", "docker-compose.worker.yml", "build") "Fallo el build de la imagen del worker"
+    Invoke-Native docker @("compose", "-f", "docker-compose.worker.yml", "up", "-d", "ollama") "Fallo al arrancar el contenedor de Ollama"
 } finally {
     Pop-Location
 }
@@ -125,7 +159,7 @@ $ggufPath = Join-Path $ChatbotRepo "training\modelo_gguf\techo360-v3.2-Q4_K_M.gg
 if (-not (Test-Path $modelfilePath) -or -not (Test-Path $ggufPath)) {
     throw "No se encontraron $modelfilePath / $ggufPath. Este PC necesita el GGUF de produccion (training/modelo_gguf/) para poder responder con el mismo modelo -- no se distribuye por git (ver training/README.md de techo360-chatbot)."
 }
-docker cp $ggufPath techo360-worker-ollama:/tmp/techo360-v3.2-Q4_K_M.gguf
+Invoke-Native docker @("cp", $ggufPath, "techo360-worker-ollama:/tmp/techo360-v3.2-Q4_K_M.gguf") "Fallo copiando el GGUF al contenedor de Ollama"
 
 # Copiamos el Modelfile REAL del repo (no lo reconstruimos inline) y solo
 # reescribimos la linea FROM para que apunte a la ruta dentro del
@@ -135,8 +169,8 @@ docker cp $ggufPath techo360-worker-ollama:/tmp/techo360-v3.2-Q4_K_M.gguf
 $localModelfileCopy = Join-Path $env:TEMP "techo360-worker-Modelfile.v3.2"
 (Get-Content $modelfilePath -Raw) -replace [regex]::Escape("FROM ../modelo_gguf/techo360-v3.2-Q4_K_M.gguf"), "FROM /tmp/techo360-v3.2-Q4_K_M.gguf" |
     Set-Content -Path $localModelfileCopy -NoNewline
-docker cp $localModelfileCopy techo360-worker-ollama:/tmp/Modelfile.v3.2
-docker exec techo360-worker-ollama ollama create $OllamaModel -f /tmp/Modelfile.v3.2
+Invoke-Native docker @("cp", $localModelfileCopy, "techo360-worker-ollama:/tmp/Modelfile.v3.2") "Fallo copiando el Modelfile al contenedor de Ollama"
+Invoke-Native docker @("exec", "techo360-worker-ollama", "ollama", "create", $OllamaModel, "-f", "/tmp/Modelfile.v3.2") "Fallo 'ollama create' importando el modelo"
 
 # ------------------------------------------------------------
 # 7. Arrancar el worker del chatbot
@@ -144,7 +178,7 @@ docker exec techo360-worker-ollama ollama create $OllamaModel -f /tmp/Modelfile.
 Write-Step "Arrancando el worker del chatbot"
 Push-Location $RepoRoot
 try {
-    docker compose -f docker-compose.worker.yml up -d chatbot-worker
+    Invoke-Native docker @("compose", "-f", "docker-compose.worker.yml", "up", "-d", "chatbot-worker") "Fallo al arrancar el contenedor del worker"
 } finally {
     Pop-Location
 }
@@ -154,7 +188,10 @@ try {
 # ------------------------------------------------------------
 Write-Step "Verificando conexion real a RabbitMQ (log del consumer)"
 Start-Sleep -Seconds 8
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 $logs = docker logs techo360-worker-chatbot 2>&1 | Out-String
+$ErrorActionPreference = $prevEap
 if ($logs -match "ACCESS_REFUSED") {
     Write-Host $logs
     throw "RabbitMQ rechazo un permiso del usuario '$RabbitMqUser' (ACCESS_REFUSED). Revisa techo360-infra/scripts/rabbitmq-worker-user.sh -- los permisos deben cubrir chatbot_requests, chatbot_eventos_persistencia y el exchange 'amq.default' (respuesta RPC via reply_to)."
