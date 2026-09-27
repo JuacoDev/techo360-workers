@@ -155,9 +155,13 @@ try {
 # ------------------------------------------------------------
 Write-Step "Importando modelo $OllamaModel en el Ollama del worker"
 $modelfilePath = Join-Path $ChatbotRepo "training\ollama\Modelfile.v3.2"
-$ggufPath = Join-Path $ChatbotRepo "training\modelo_gguf\techo360-v3.2-Q4_K_M.gguf"
+# El GGUF ya NO vive en techo360-chatbot (limpieza 27-sep-2026: ese repo
+# solo conserva codigo/metricas, no los ~38G de artefactos de
+# entrenamiento) -- vive junto al instalador, en models/, sin trackear
+# por git (ver .gitignore, demasiado pesado para el historial).
+$ggufPath = Join-Path $RepoRoot "models\techo360-v3.2-Q4_K_M.gguf"
 if (-not (Test-Path $modelfilePath) -or -not (Test-Path $ggufPath)) {
-    throw "No se encontraron $modelfilePath / $ggufPath. Este PC necesita el GGUF de produccion (training/modelo_gguf/) para poder responder con el mismo modelo -- no se distribuye por git (ver training/README.md de techo360-chatbot)."
+    throw "No se encontraron $modelfilePath / $ggufPath. Este PC necesita el GGUF de produccion en techo360-workers/models/ para poder responder con el mismo modelo -- no se distribuye por git."
 }
 Invoke-Native docker @("cp", $ggufPath, "techo360-worker-ollama:/tmp/techo360-v3.2-Q4_K_M.gguf") "Fallo copiando el GGUF al contenedor de Ollama"
 

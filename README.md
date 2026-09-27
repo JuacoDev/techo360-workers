@@ -28,11 +28,13 @@ mezclar con el compose del VPS.
     techo360-chatbot/
     techo360-workers/   <- este repo
   ```
-- El GGUF de producción (`techo360-chatbot/training/modelo_gguf/techo360-v3.2-Q4_K_M.gguf`)
-  presente localmente -- no se distribuye por git (ver
-  `techo360-chatbot/training/README.md`). En esta validación ya está
-  en la máquina del desarrollador; para labs reales hace falta un
-  mecanismo de distribución del modelo (fuera de alcance de esta tarea).
+- El GGUF de producción en `models/techo360-v3.2-Q4_K_M.gguf` (junto a
+  este instalador, sin trackear por git -- ver `.gitignore`, 1.9G es
+  demasiado pesado para el historial). Movido aquí el 27-sep-2026 desde
+  `techo360-chatbot/training/modelo_gguf/` al limpiar ese repo de
+  artefactos de entrenamiento. Para labs reales hace falta hornear el
+  modelo dentro de la imagen Docker (ver más abajo) en vez de depender
+  de este archivo local.
 - Credenciales del usuario RabbitMQ `techo360-worker` (ver
   "Usuario de RabbitMQ" abajo) -- **nunca** las credenciales que ya usa
   el chatbot del VPS.
@@ -146,8 +148,8 @@ exacto que usaría un publicador real), no con una petición HTTP real a
 - Reconexión automática tras apagado/encendido diario de los labs.
 - RabbitMQ escuchando en la IP privada de la universidad
   (`10.154.12.191`) -- hoy solo escucha en la IP de Tailscale.
-- Distribución del modelo GGUF a cada máquina de laboratorio (hoy
-  depende de tenerlo ya en disco).
-- Empaquetar `install-worker.ps1` como `.exe` real (ej. `ps2exe`) para
-  distribuir a máquinas sin PowerShell/permisos de ejecución de scripts
-  -- esta primera validación corre el `.ps1` directamente.
+- **Siguiente paso real antes de laboratorios**: hornear el modelo
+  (`models/techo360-v3.2-Q4_K_M.gguf`) dentro de la imagen Docker del
+  worker (`docker-compose.worker.yml`), para no depender de un archivo
+  local en el disco de cada máquina -- hoy el instalador asume que ese
+  GGUF ya está ahí (ver "Requisitos").
