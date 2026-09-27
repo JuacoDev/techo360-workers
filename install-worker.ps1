@@ -126,7 +126,16 @@ if (-not (Test-Path $modelfilePath) -or -not (Test-Path $ggufPath)) {
     throw "No se encontraron $modelfilePath / $ggufPath. Este PC necesita el GGUF de produccion (training/modelo_gguf/) para poder responder con el mismo modelo -- no se distribuye por git (ver training/README.md de techo360-chatbot)."
 }
 docker cp $ggufPath techo360-worker-ollama:/tmp/techo360-v3.2-Q4_K_M.gguf
-docker exec techo360-worker-ollama sh -c "printf 'FROM /tmp/techo360-v3.2-Q4_K_M.gguf\nSYSTEM \"Eres el asistente virtual de Techo 360, una plataforma que analiza la pobreza y el deficit de vivienda en los municipios de Colombia. Respondes en espanol de forma clara y precisa sobre el Score de Privacion y los indicadores de Techo 360, y sobre la politica publica colombiana de vivienda y pobreza (IPM, deficit habitacional, cobertura de acueducto y alcantarillado) en la que se basa el sistema.\"\nPARAMETER temperature 0.3\nPARAMETER top_p 0.9\nPARAMETER repeat_penalty 1.15\nPARAMETER num_ctx 2048\n' > /tmp/Modelfile.v3.2"
+
+# Copiamos el Modelfile REAL del repo (no lo reconstruimos inline) y solo
+# reescribimos la linea FROM para que apunte a la ruta dentro del
+# contenedor -- asi el system prompt/parametros quedan garantizados
+# identicos al de techo360-chatbot/training/ollama/Modelfile.v3.2, sin
+# duplicar ese texto (y su quoting) aqui.
+$localModelfileCopy = Join-Path $env:TEMP "techo360-worker-Modelfile.v3.2"
+(Get-Content $modelfilePath -Raw) -replace [regex]::Escape("FROM ../modelo_gguf/techo360-v3.2-Q4_K_M.gguf"), "FROM /tmp/techo360-v3.2-Q4_K_M.gguf" |
+    Set-Content -Path $localModelfileCopy -NoNewline
+docker cp $localModelfileCopy techo360-worker-ollama:/tmp/Modelfile.v3.2
 docker exec techo360-worker-ollama ollama create $OllamaModel -f /tmp/Modelfile.v3.2
 
 # ------------------------------------------------------------
@@ -144,8 +153,12 @@ try {
 # 8. Verificacion REAL de conexion (no solo "running")
 # ------------------------------------------------------------
 Write-Step "Verificando conexion real a RabbitMQ (log del consumer)"
-Start-Sleep -Seconds 5
+Start-Sleep -Seconds 8
 $logs = docker logs techo360-worker-chatbot 2>&1 | Out-String
+if ($logs -match "ACCESS_REFUSED") {
+    Write-Host $logs
+    throw "RabbitMQ rechazo un permiso del usuario '$RabbitMqUser' (ACCESS_REFUSED). Revisa techo360-infra/scripts/rabbitmq-worker-user.sh -- los permisos deben cubrir chatbot_requests, chatbot_eventos_persistencia y el exchange 'amq.default' (respuesta RPC via reply_to)."
+}
 if ($logs -match "Consumidor de 'chatbot_requests' arrancado \(x-priority=10\)") {
     Write-Host "CONECTADO: el consumer confirmo arranque con prioridad 10." -ForegroundColor Green
 } else {

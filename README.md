@@ -63,17 +63,37 @@ administrador (no puede entrar al panel de management). Permisos
 mínimos en el vhost `/` -- mismo alcance que ya tiene el chatbot del
 VPS, ni más ni menos:
 
-| Permiso   | Regex                                                 | Para qué |
-|-----------|--------------------------------------------------------|----------|
-| configure | `^(chatbot_requests\|chatbot_eventos_persistencia)?$` | declarar/pasar por alto ambas colas |
-| write     | `^(chatbot_requests\|chatbot_eventos_persistencia)?$` | publicar eventos + responder RPC por el exchange por defecto (regex vacío) |
-| read      | `^chatbot_requests$`                                  | consumir la cola de solicitudes |
+| Permiso   | Regex                                                          | Para qué |
+|-----------|-----------------------------------------------------------------|----------|
+| configure | `^(chatbot_requests\|chatbot_eventos_persistencia)?$`          | declarar/pasar por alto ambas colas |
+| write     | `^(chatbot_requests\|chatbot_eventos_persistencia\|amq\.default)$` | publicar eventos + responder RPC por el exchange por defecto |
+| read      | `^chatbot_requests$`                                           | consumir la cola de solicitudes |
+
+`amq.default` es el nombre real que RabbitMQ usa para el chequeo de
+permisos del exchange por defecto (aunque en AMQP se declare/publique
+con nombre vacío `""`) -- confirmado real al validar el primer worker:
+sin este permiso, el consumer recibía el mensaje y generaba la
+respuesta con Ollama, pero RabbitMQ rechazaba publicarla de vuelta
+(`ACCESS_REFUSED - write access to exchange 'amq.default' ... refused`).
 
 Se crea/actualiza con `techo360-infra/scripts/rabbitmq-worker-user.sh`,
-disparado por el workflow manual `manage-rabbitmq-worker-user.yml` de
-ese repo (corre `rabbitmqctl` en el contenedor real del VPS via el
-runner self-hosted -- nunca SSH manual). Requiere el secret de repo
-`WORKER_RABBITMQ_PASSWORD` configurado de antemano.
+que corre como parte de `deploy-infra.sh` (paso 5) en cada push a
+`development` de ese repo -- via el runner self-hosted del VPS, nunca
+SSH manual. Requiere el secret de repo `WORKER_RABBITMQ_PASSWORD`
+configurado de antemano. Un workflow liviano aparte
+(`diagnose-rabbitmq.yml`, disparado con un push a `.trigger-diagnose`)
+imprime `rabbitmqctl list_consumers` para verificar en cualquier
+momento quién está consumiendo `chatbot_requests` y con qué prioridad,
+sin disparar el pipeline pesado de `deploy-infra.sh`.
+
+### Nota sobre logs del consumer
+
+`techo360-chatbot` no tenía `logging.basicConfig` configurado, así que
+los `logger.info(...)` de `app/rabbitmq_consumer.py` (incluida la
+confirmación de arranque con su `x-priority`) nunca aparecían en
+`docker logs` -- se corrigió en ese repo (`app/main.py`). Sin ese fix,
+la única forma real de verificar la conexión del worker era
+`rabbitmqctl list_consumers` del lado del VPS.
 
 ## Prioridad de consumo
 
