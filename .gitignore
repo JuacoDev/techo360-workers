@@ -3,3 +3,6 @@
 __pycache__/
 *.pyc
 models/*.gguf
+tools-usb/
+tools/spike/*.tar.gz
+worker-log.txt
