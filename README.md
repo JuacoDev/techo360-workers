@@ -123,29 +123,34 @@ usa prioridad **10**; el consumer del VPS (`techo360-infra`) quedó en
 prioridad **0** como respaldo. Ver `CHATBOT_CONSUMER_PRIORITY` en
 `techo360-chatbot/app/rabbitmq_consumer.py`.
 
-## Hallazgo importante (no resuelto en esta tarea)
+## Cómo llega un mensaje del usuario a un worker (actualizado 9-oct-2026)
 
-`POST /chatbot/send` **no pasa por RabbitMQ hoy**: `techo360-frontend/nginx.conf`
-enruta ese endpoint directo al contenedor `chatbot:8000`, que llama a
-Ollama en el mismo proceso. El consumer de `chatbot_requests` (y por lo
-tanto todo este pool de workers) solo recibe tráfico si algo publica en
-esa cola -- hoy únicamente lo hace `techo360-chatbot/scripts/probar_rabbitmq_local.py`
-(script de prueba). Para que el tráfico real de usuarios use el pool de
-workers hace falta, en una tarea aparte:
+La sección «Hallazgo importante» de versiones anteriores (que decía que `/chatbot/send` iba directo al chatbot sin pasar por RabbitMQ) **está obsoleta**. Hoy el camino real es:
 
-1. Un publicador RPC nuevo en `techo360-backend` (mismo patrón que
-   `services/proyeccion_rpc_client.py`).
-2. Cambiar `techo360-frontend/nginx.conf` para que `/chatbot/send` pase
-   por el backend en vez de ir directo al contenedor chatbot.
+1. El frontend llama a `POST /chatbot/conversaciones/{id}/mensajes/enviar` (nginx → **backend**, no al chatbot).
+2. El backend publica la petición en `chatbot_requests` como RPC (`techo360-backend/services/chatbot_rpc_client.py`, espera hasta 200 s) y persiste el intercambio él mismo.
+3. RabbitMQ la entrega al consumer **de mayor prioridad que esté libre**: los workers de este repo (prioridad **10**) antes que el chatbot de la VPS (prioridad **0**), todos con `prefetch 1` (un mensaje a la vez por consumer).
+4. Si todos los workers están ocupados o desconectados, el mensaje cae al Ollama de la VPS: **la VPS no es solo un último recurso**. El 9-oct, con el worker caído, atendió 8 de 10 envíos.
 
-Esta tarea (validación del worker) se verificó publicando directamente
-en `chatbot_requests` con el script de prueba (mismo mecanismo RPC
-exacto que usaría un publicador real), no con una petición HTTP real a
-`/chatbot/send`.
+Sobre `POST /chatbot/send` (endpoint de pruebas locales del chatbot, sin persistencia):
+- En el código del chatbot (rama `Testing`) solo existe si `CHATBOT_HABILITAR_SEND_LOCAL=1`.
+- **No verificado / pendiente:** en `techo360-frontend`, `development` todavía enruta `/chatbot/send` al chatbot; el hotfix de nginx que lo responde con 405 es el PR #37 del frontend, a la espera de su autorización. No cuenta como cerrado hasta que se despliegue.
+
+## Instalar un worker nuevo (otra máquina)
+
+1. **Requisitos:** los de la sección «Requisitos» (Docker, `techo360-chatbot` hermano, GGUF en `models/`, credenciales de `techo360-worker`).
+2. **Prioridad de consumidor = 10.** Ya es el valor por defecto (`CHATBOT_CONSUMER_PRIORITY=10` en el `.env` que genera el instalador y en el compose). No cambiarlo: con otra prioridad el reparto con la VPS (0) y entre workers deja de ser el esperado.
+3. **Hilos de Ollama según las CPU de esa máquina.** Añadir al `.env` (junto a las demás variables):
+   ```
+   OLLAMA_NUM_THREAD=<n>
+   ```
+   Sin la variable queda en 3. Regla práctica: menos hilos que núcleos físicos, dejando al menos uno libre para el sistema y para el propio worker (p. ej. 4 en una máquina de 6 núcleos, 6 en una de 8). **Más hilos que núcleos libres empeora**: llama.cpp sincroniza sus hilos y uno desplazado frena a todos (medición local: con 5 hilos en un host de 6, 12,5 tok/s frente a 14,9 con 4). Medir con un mensaje real antes de dejarlo. Requiere la versión del chatbot que lee `OLLAMA_NUM_THREAD` (PR #10 de `techo360-chatbot`); con una imagen anterior la variable se ignora (queda en 3). El instalador `.exe` actual no pregunta este valor: se edita `.env` a mano y se vuelve a ejecutar `docker compose -f docker-compose.worker.yml up -d`.
+4. **Política de reinicio:** `restart: unless-stopped` ya está en ambos servicios del compose. Para que el worker vuelva solo tras reiniciar la máquina, Docker Desktop debe arrancar con la sesión y la máquina debe tener red hacia RabbitMQ (Tailscale hoy). Si RabbitMQ no está disponible al arrancar, el contenedor aborta y Docker lo reintenta; una vez conectado, el consumer se reconecta solo (`connect_robust`, cada 5 s).
+5. **Verificar:** `docker logs techo360-worker-chatbot` debe mostrar «Consumidor de 'chatbot_requests' arrancado (x-priority=10)», y en la VPS (solo lectura) `docker exec techo360-rabbitmq rabbitmqctl list_queues name messages consumers` debe mostrar un consumer más en `chatbot_requests`.
 
 ## Lo que falta para el despliegue real de laboratorio (no en esta tarea)
 
-- Reconexión automática tras apagado/encendido diario de los labs.
+- Reconexión automática tras apagado/encendido diario de los labs (parcial: ver «Instalar un worker nuevo», punto 4, y el PR de resiliencia de este repo; no verificado en labs reales).
 - RabbitMQ escuchando en la IP privada de la universidad
   (`10.154.12.191`) -- hoy solo escucha en la IP de Tailscale.
 - **Siguiente paso real antes de laboratorios**: hornear el modelo
