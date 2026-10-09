@@ -25,14 +25,15 @@ if ($Quitar) {
         }
     }
     # 2) distro WSL registrada por SYSTEM
-    if (Test-Path $wsl) {
+    if ((Test-Path $wsl) -and -not [Security.Principal.WindowsIdentity]::GetCurrent().IsSystem) {
+        Q "AVISO: no es SYSTEM; no se toca WSL (la distro del spike solo existe en la cuenta SYSTEM)."; $registro = $false; $corriendoAlguna = $false
+    } elseif (Test-Path $wsl) {
         Q ("wsl -l -v ANTES: " + (Linea (& $wsl -l -v 2>&1)))
         & $wsl --terminate techo360spike 2>&1 | Out-Null
         $u = Sin-Nulos (& $wsl --unregister techo360spike 2>&1)
         Q ("wsl --unregister: " + ($u -replace "\s+", " ").Trim())
-        # Apaga la VM de WSL de SYSTEM (cada usuario tiene la suya; esto no afecta a otros usuarios).
-        # Solo como SYSTEM: ejecutado como usuario normal apagaria SU WSL (y el motor de Docker Desktop).
-        if ([Security.Principal.WindowsIdentity]::GetCurrent().IsSystem) { & $wsl --shutdown 2>&1 | Out-Null } else { Q "AVISO: no es SYSTEM; se omite wsl --shutdown (prueba parcial)" }
+        # NUNCA "wsl --shutdown": apagaria todas las distros de la cuenta que lo ejecuta. Solo --terminate y
+        # --unregister sobre techo360spike (la VM de utilidad se apaga sola al quedar sin distros activas).
         Start-Sleep -Seconds 3
         $despues = Sin-Nulos (& $wsl -l -v 2>&1)
         $corriendo = Sin-Nulos (& $wsl -l --running 2>&1)
