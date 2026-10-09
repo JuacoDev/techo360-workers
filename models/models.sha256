@@ -1,0 +1,4 @@
+# SHA-256 esperado de cada GGUF (fuente de verdad para verificar antes de importar a Ollama).
+# Formato: <sha256>  <archivo>. v3.2 = rollback; v3.3 = version adoptada (9-oct-2026).
+ff78ba2094ca342dc98a5b644047ff732f8387eda0bb627dcb5f3bebae2fe3d9  techo360-v3.2-Q4_K_M.gguf
+44379524de01777fb03172d0c4de7e1fd0eda025fe9b90bbcb0cce1a10d2a9e9  techo360-v3.3-Q4_K_M.gguf
