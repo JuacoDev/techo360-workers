@@ -50,7 +50,8 @@ function Need-Admin {
 # codigo solo la escriben SYSTEM y Administradores. SIDs, no nombres (independiente del idioma).
 function Lock-Dir([string]$d) {
     New-Item -ItemType Directory -Force -Path $d | Out-Null
-    & icacls.exe $d /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C | Out-Null
+    $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"   # icacls escribe avisos en stderr
+    try { & icacls.exe $d /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C 2>&1 | Out-Null } finally { $ErrorActionPreference = $prev }
     if ($LASTEXITCODE -ne 0) { throw "icacls no pudo bloquear $d (exit $LASTEXITCODE). No se continua." }
 }
 
@@ -86,7 +87,7 @@ if ($Instalar) {
     if ($rootfsOrigen) { Copy-Item $rootfsOrigen (Join-Path $dir "alpine.tar.gz") -Force }
     $cfg = @{ RabbitHostPort = @($RabbitHostPort); ProbarWsl = [bool]$ProbarWsl; Minutos = $Minutos } | ConvertTo-Json
     Set-Content -Path (Join-Path $dir "config.json") -Value $cfg
-    & icacls.exe $dir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C | Out-Null
+    Lock-Dir $dir   # re-aplica la ACL a lo recien copiado
     $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$dir\spike-boot.ps1`""
     $trigger = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
