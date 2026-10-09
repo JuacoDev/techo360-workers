@@ -39,7 +39,7 @@ Todos los comandos, desde PowerShell: powershell -NoProfile -ExecutionPolicy Byp
 
 6) QUITAR TODO (PowerShell como Administrador)
      spike-arranque.ps1 -Quitar
-   Debe terminar con "RESULTADO: LIMPIO" (sin distro WSL, VM ni procesos) y "Spike eliminado".
+   Debe terminar con "RESULTADO: LIMPIO" (sin distro WSL ni procesos del spike) y "Spike eliminado".
    Si dice "QUEDAN RESTOS", no borra la carpeta: enviar el quitar.log mostrado.
 
 Archivos: inventario-pc.ps1, spike-arranque.ps1, spike-boot.ps1, alpine-minirootfs-...tar.gz, SHA256SUMS.txt
