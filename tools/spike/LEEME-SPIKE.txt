@@ -1,0 +1,45 @@
+TECHO 360 - SPIKE DE ARRANQUE SIN SESION  (1 pagina)
+=====================================================
+Objetivo: comprobar si este equipo puede arrancar un proceso de SYSTEM al encender, SIN que nadie
+inicie sesion, y recoger los requisitos del equipo. No instala software, no usa credenciales, no
+se conecta a RabbitMQ con login (solo prueba TCP al puerto 5672 y cierra). Se puede quitar entero.
+
+REQUISITOS: cuenta de administrador local. Copiar esta carpeta al disco local (ej. C:\spike\).
+Todos los comandos, desde PowerShell: powershell -NoProfile -ExecutionPolicy Bypass -File <script> ...
+
+1) INVENTARIO (solo lectura; mejor como administrador)
+     inventario-pc.ps1 -Salida inventario.txt
+
+2) INSTALAR EL SPIKE (PowerShell como Administrador, en esta carpeta)
+     spike-arranque.ps1 -Instalar -ProbarWsl
+   (usa alpine-minirootfs-3.20.3-x86_64.tar.gz de esta carpeta y verifica su SHA-256; sin internet.
+    Si el equipo no tiene WSL, omitir -ProbarWsl.) Crea la tarea "Techo360Spike" (SYSTEM, al
+    iniciar el sistema) y bloquea C:\ProgramData\Techo360Spike\ para SYSTEM y Administradores.
+
+3) PRUEBA: APAGAR y ENCENDER a mano
+   - Inicio > Apagar (NO Reiniciar). Espera 30 s. Enciende con el boton.
+   - Quedate en la pantalla de inicio de sesion ~10 minutos. NO inicies sesion.
+   - Luego inicia sesion con el administrador.
+
+4) LEER EL RESULTADO (PowerShell como Administrador)
+     spike-arranque.ps1 -Estado        (muestra C:\ProgramData\Techo360Spike\boot.log)
+   Que mirar:
+   - "INICIO spike. Usuario=nt authority\system sesiones_interactivas=0 explorer=0"  -> corrio sin sesion.
+   - Lineas "marca#N ... sesiones_interactivas=0" durante varios minutos -> sigue vivo sin sesion.
+   - "InicioRapido(HiberbootEnabled)=1" y "arranque_real(...)" / "Kernel-Boot27": si el Inicio rapido
+     esta activo, Apagar no es un arranque completo. Repite el paso 3 con Inicio > REINICIAR y compara.
+   - "tcp: 10.154.12.191:5672=..." -> ALCANZABLE o timeout (timeout es normal hasta que se abra ese puerto).
+   - "wsl --import como SYSTEM (exit 0)" y "wsl exec como SYSTEM: wsl_vivo ..." -> WSL funciona como SYSTEM.
+     Si dice que WSL o la virtualizacion no estan habilitadas, tambien es un resultado valido.
+   - "ollama.exe no encontrado" es normal (no se instala nada).
+   Copia el texto de boot.log e inventario.txt y envialos.
+
+5) REPETIR si el Inicio rapido estaba activo: -Quitar no hace falta entre pruebas; basta con repetir el paso 3
+   con REINICIAR. El boot.log acumula ambas.
+
+6) QUITAR TODO (PowerShell como Administrador)
+     spike-arranque.ps1 -Quitar
+   Debe terminar con "RESULTADO: LIMPIO" (sin distro WSL, VM ni procesos) y "Spike eliminado".
+   Si dice "QUEDAN RESTOS", no borra la carpeta: enviar el quitar.log mostrado.
+
+Archivos: inventario-pc.ps1, spike-arranque.ps1, spike-boot.ps1, alpine-minirootfs-...tar.gz, SHA256SUMS.txt

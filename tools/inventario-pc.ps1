@@ -41,6 +41,11 @@ Kv "Windows" "$($os.Caption) (build $($os.BuildNumber).$($cv.UBR))"
 Kv "Edicion" $cv.EditionID
 Kv "Arquitectura" $os.OSArchitecture
 Kv "Ultimo arranque" $os.LastBootUpTime
+# LastBootUpTime NO cambia con Inicio rapido (Apagar no apaga del todo). Kernel-General 12 y
+# Kernel-Boot 27 (0 = arranque completo, 1 = Inicio rapido, 2 = reanudar de hibernacion) si.
+Kv "Inicio rapido (HiberbootEnabled, 1=activo)" (Try-Get { (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' -ErrorAction Stop).HiberbootEnabled })
+Kv "Arranque real (evento Kernel-General 12)" (Try-Get { (Get-WinEvent -FilterHashtable @{ LogName = "System"; ProviderName = "Microsoft-Windows-Kernel-General"; Id = 12 } -MaxEvents 1 -ErrorAction Stop).TimeCreated.ToString("yyyy-MM-dd HH:mm:ss") })
+Kv "Tipo de arranque (Kernel-Boot 27)" (Try-Get { (Get-WinEvent -FilterHashtable @{ LogName = "System"; ProviderName = "Microsoft-Windows-Kernel-Boot"; Id = 27 } -MaxEvents 1 -ErrorAction Stop).Message -replace "\s+", " " })
 Kv "Politica de ejecucion de scripts" (Try-Get { (Get-ExecutionPolicy -List | ForEach-Object { "$($_.Scope)=$($_.ExecutionPolicy)" }) -join "; " })
 
 Sec "Hardware"

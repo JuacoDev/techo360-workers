@@ -128,12 +128,13 @@ if (Test-Path $envPath) {
     $envModel = ($envLines | Where-Object { $_ -match '^OLLAMA_MODEL=' } | Select-Object -First 1)
     $envVer = ($envLines | Where-Object { $_ -match '^MODEL_VERSION=' } | Select-Object -First 1)
     if ($envModel -ne "OLLAMA_MODEL=$OllamaModel" -or $envVer -ne "MODEL_VERSION=$ModelVersion") {
-        Copy-Item $envPath "$envPath.bak" -Force
+        # Respaldo SIN secretos: la linea de la password se redacta (el .env original conserva la real).
+        [System.IO.File]::WriteAllLines("$envPath.bak", @($envLines | ForEach-Object { if ($_ -match '^RABBITMQ_PASSWORD=') { 'RABBITMQ_PASSWORD=***REDACTADO***' } else { $_ } }))
         $nuevo = @($envLines | Where-Object { $_ -notmatch '^(OLLAMA_MODEL|MODEL_VERSION)=' })
         $nuevo += "MODEL_VERSION=$ModelVersion"
         $nuevo += "OLLAMA_MODEL=$OllamaModel"
         [System.IO.File]::WriteAllLines($envPath, $nuevo)
-        Write-Host "AVISO: el .env no coincidia con la version $ModelVersion; se alineo OLLAMA_MODEL/MODEL_VERSION. Respaldo: $envPath.bak (contiene la password: borralo tras verificar)." -ForegroundColor Yellow
+        Write-Host "AVISO: el .env no coincidia con la version $ModelVersion; se alineo OLLAMA_MODEL/MODEL_VERSION. Respaldo (con la password redactada): $envPath.bak." -ForegroundColor Yellow
     } else {
         Write-Host "OLLAMA_MODEL ya coincide con $OllamaModel."
     }
