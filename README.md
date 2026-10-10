@@ -148,6 +148,13 @@ Sobre `POST /chatbot/send` (endpoint de pruebas locales del chatbot, sin persist
 4. **Política de reinicio:** `restart: unless-stopped` ya está en ambos servicios del compose. Para que el worker vuelva solo tras reiniciar la máquina, Docker Desktop debe arrancar con la sesión y la máquina debe tener red hacia RabbitMQ (Tailscale hoy). Si RabbitMQ no está disponible al arrancar, el contenedor aborta y Docker lo reintenta; una vez conectado, el consumer se reconecta solo (`connect_robust`, cada 5 s).
 5. **Verificar:** `docker logs techo360-worker-chatbot` debe mostrar «Consumidor de 'chatbot_requests' arrancado (x-priority=10)», y en la VPS (solo lectura) `docker exec techo360-rabbitmq rabbitmqctl list_queues name messages consumers` debe mostrar un consumer más en `chatbot_requests`.
 
+## Avisos de cancelación (paquete v3.3)
+Cuando el usuario cancela un mensaje que el worker ya está generando, el backend publica un aviso en el exchange `chatbot_cancelaciones` y el consumer **aborta la llamada a Ollama de ese intento** (antes la generación seguía ~46 s y su resultado se descartaba). Está en el código del chatbot (`app/rabbitmq_consumer.py`, PR #11 de `techo360-chatbot`), por lo tanto **entra al worker al reconstruir la imagen desde un SHA del chatbot que lo incluya** (`build-worker-image.ps1 -ChatbotSha ...`; el `Dockerfile.worker` y `requirements-worker.txt` no cambian: usa solo `aio-pika`, `uuid` y `asyncio`).
+- **Imagen vieja = sin efecto, sin daño:** ignora los campos nuevos y el exchange; sigue generando como siempre.
+- **Permisos de RabbitMQ:** para suscribirse, `techo360-worker` necesita los permisos de nombres exactos del PR de `techo360-infra` (`scripts/rabbitmq-worker-user.sh`; sin `.*`, sin write en el exchange). Sin ellos el consumer arranca y trabaja igual y solo registra el aviso `No se pudo suscribir a los avisos de cancelacion` (verificado contra un RabbitMQ desechable).
+- **Verificar en un worker:** `docker logs techo360-worker-chatbot | grep -i cancelacion` debe mostrar `Suscrito a los avisos de cancelacion`.
+- **Límites:** un aviso que llega antes que su mensaje se recuerda 10 min y como máximo 500 avisos; la cola de avisos es exclusiva, se borra al desconectar y descarta avisos de más de 10 min. **No verificado:** que Ollama detenga su cálculo al cerrarse la conexión (probado con Ollama simulado).
+
 ## Lo que falta para el despliegue real de laboratorio (no en esta tarea)
 
 - Reconexión automática tras apagado/encendido diario de los labs (parcial: ver «Instalar un worker nuevo», punto 4, y el PR de resiliencia de este repo; no verificado en labs reales).
