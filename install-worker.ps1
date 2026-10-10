@@ -36,7 +36,10 @@ param(
     [int]$RabbitMqPort = 5672,
     [string]$RabbitMqUser = "techo360-worker",
     [System.Security.SecureString]$RabbitMqPassword,
-    [string]$OllamaModel = "techo360-chatbot:v3.2"
+    # Fuente unica de la version del modelo: de aqui se derivan el tag de Ollama, el
+    # nombre del GGUF y el Modelfile. Rollback: -ModelVersion 3.2 (v3.2 sigue intacta).
+    [ValidatePattern('^\d+\.\d+$')]
+    [string]$ModelVersion = "3.3"
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,6 +47,9 @@ $ErrorActionPreference = "Stop"
 # -- se resuelve al ejecutable real (MainModule) en ese caso.
 $RepoRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -Parent }
 $ChatbotRepo = Join-Path (Split-Path $RepoRoot -Parent) "techo360-chatbot"
+$OllamaModel = "techo360-chatbot:v$ModelVersion"
+$GgufName = "techo360-v$ModelVersion-Q4_K_M.gguf"
+$ModelfileName = "Modelfile.v$ModelVersion"
 
 function Write-Step($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Cyan }
 
@@ -114,8 +120,24 @@ Write-Host "Encontrado: $ChatbotRepo"
 # ------------------------------------------------------------
 $envPath = Join-Path $RepoRoot ".env"
 if (Test-Path $envPath) {
-    Write-Step ".env existente detectado, se usa tal cual"
-    Write-Host "Encontrado: $envPath (no se pide password, no se modifica)"
+    Write-Step ".env existente detectado"
+    Write-Host "Encontrado: $envPath (no se pide password; el contenido no se imprime)"
+    # Si el .env fija otra version del modelo, el instalador importaria $OllamaModel pero el
+    # worker serviria la del .env: se alinea (con respaldo) en vez de usarlo tal cual.
+    $envLines = [System.IO.File]::ReadAllLines($envPath)
+    $envModel = ($envLines | Where-Object { $_ -match '^OLLAMA_MODEL=' } | Select-Object -First 1)
+    $envVer = ($envLines | Where-Object { $_ -match '^MODEL_VERSION=' } | Select-Object -First 1)
+    if ($envModel -ne "OLLAMA_MODEL=$OllamaModel" -or $envVer -ne "MODEL_VERSION=$ModelVersion") {
+        # Respaldo SIN secretos: la linea de la password se redacta (el .env original conserva la real).
+        [System.IO.File]::WriteAllLines("$envPath.bak", @($envLines | ForEach-Object { if ($_ -match '^RABBITMQ_PASSWORD=') { 'RABBITMQ_PASSWORD=***REDACTADO***' } else { $_ } }))
+        $nuevo = @($envLines | Where-Object { $_ -notmatch '^(OLLAMA_MODEL|MODEL_VERSION)=' })
+        $nuevo += "MODEL_VERSION=$ModelVersion"
+        $nuevo += "OLLAMA_MODEL=$OllamaModel"
+        [System.IO.File]::WriteAllLines($envPath, $nuevo)
+        Write-Host "AVISO: el .env no coincidia con la version $ModelVersion; se alineo OLLAMA_MODEL/MODEL_VERSION. Respaldo (con la password redactada): $envPath.bak." -ForegroundColor Yellow
+    } else {
+        Write-Host "OLLAMA_MODEL ya coincide con $OllamaModel."
+    }
 } else {
     Write-Step "Generando .env"
     if (-not $RabbitMqPassword) {
@@ -130,6 +152,7 @@ RABBITMQ_HOST=$RabbitMqHost
 RABBITMQ_PORT=$RabbitMqPort
 RABBITMQ_USER=$RabbitMqUser
 RABBITMQ_PASSWORD=$plainPassword
+MODEL_VERSION=$ModelVersion
 OLLAMA_MODEL=$OllamaModel
 CHATBOT_CONSUMER_PRIORITY=10
 "@
@@ -154,27 +177,40 @@ try {
 # 6. Importar el modelo de produccion en el Ollama del worker
 # ------------------------------------------------------------
 Write-Step "Importando modelo $OllamaModel en el Ollama del worker"
-$modelfilePath = Join-Path $ChatbotRepo "training\ollama\Modelfile.v3.2"
+# Modelfile: primero el copiado junto al instalador (paquete USB, models\), si no el del repo hermano.
+$modelfilePath = Join-Path $RepoRoot "models\$ModelfileName"
+if (-not (Test-Path $modelfilePath)) { $modelfilePath = Join-Path $ChatbotRepo "training\ollama\$ModelfileName" }
 # El GGUF ya NO vive en techo360-chatbot (limpieza 27-sep-2026: ese repo
 # solo conserva codigo/metricas, no los ~38G de artefactos de
 # entrenamiento) -- vive junto al instalador, en models/, sin trackear
 # por git (ver .gitignore, demasiado pesado para el historial).
-$ggufPath = Join-Path $RepoRoot "models\techo360-v3.2-Q4_K_M.gguf"
+$ggufPath = Join-Path $RepoRoot "models\$GgufName"
 if (-not (Test-Path $modelfilePath) -or -not (Test-Path $ggufPath)) {
-    throw "No se encontraron $modelfilePath / $ggufPath. Este PC necesita el GGUF de produccion en techo360-workers/models/ para poder responder con el mismo modelo -- no se distribuye por git."
+    throw "No se encontraron $modelfilePath / $ggufPath. Este PC necesita el GGUF v$ModelVersion en techo360-workers/models/ (y su Modelfile) -- no se distribuye por git."
 }
-Invoke-Native docker @("cp", $ggufPath, "techo360-worker-ollama:/tmp/techo360-v3.2-Q4_K_M.gguf") "Fallo copiando el GGUF al contenedor de Ollama"
 
-# Copiamos el Modelfile REAL del repo (no lo reconstruimos inline) y solo
-# reescribimos la linea FROM para que apunte a la ruta dentro del
-# contenedor -- asi el system prompt/parametros quedan garantizados
-# identicos al de techo360-chatbot/training/ollama/Modelfile.v3.2, sin
-# duplicar ese texto (y su quoting) aqui.
-$localModelfileCopy = Join-Path $env:TEMP "techo360-worker-Modelfile.v3.2"
-(Get-Content $modelfilePath -Raw) -replace [regex]::Escape("FROM ../modelo_gguf/techo360-v3.2-Q4_K_M.gguf"), "FROM /tmp/techo360-v3.2-Q4_K_M.gguf" |
-    Set-Content -Path $localModelfileCopy -NoNewline
-Invoke-Native docker @("cp", $localModelfileCopy, "techo360-worker-ollama:/tmp/Modelfile.v3.2") "Fallo copiando el Modelfile al contenedor de Ollama"
-Invoke-Native docker @("exec", "techo360-worker-ollama", "ollama", "create", $OllamaModel, "-f", "/tmp/Modelfile.v3.2") "Fallo 'ollama create' importando el modelo"
+# Verificacion de integridad contra models\models.sha256 ANTES de importar.
+$shaFile = Join-Path $RepoRoot "models\models.sha256"
+if (-not (Test-Path $shaFile)) { throw "Falta $shaFile (SHA-256 esperado de los GGUF)." }
+$expected = (Get-Content $shaFile | Where-Object { $_ -match "^[0-9a-f]{64}\s+$([regex]::Escape($GgufName))\s*$" } | ForEach-Object { ($_ -split '\s+')[0] } | Select-Object -First 1)
+if (-not $expected) { throw "models.sha256 no tiene entrada para $GgufName." }
+Write-Host "Calculando SHA-256 de $GgufName (~2 GB)..."
+$actual = (Get-FileHash -Algorithm SHA256 $ggufPath).Hash.ToLower()
+if ($actual -ne $expected) { throw "SHA-256 de $GgufName no coincide (esperado $expected, obtenido $actual). Archivo corrupto o version equivocada: no se importa." }
+Write-Host "SHA-256 OK: $actual"
+
+Invoke-Native docker @("cp", $ggufPath, "techo360-worker-ollama:/tmp/$GgufName") "Fallo copiando el GGUF al contenedor de Ollama"
+
+# Copiamos el Modelfile REAL (no lo reconstruimos inline) y solo reescribimos la linea
+# FROM para que apunte a la ruta dentro del contenedor -- asi el system prompt/parametros
+# quedan identicos al Modelfile versionado, sin duplicar ese texto aqui.
+$localModelfileCopy = Join-Path $env:TEMP "techo360-worker-$ModelfileName"
+$mfOriginal = Get-Content $modelfilePath -Raw
+$mfNuevo = [regex]::Replace($mfOriginal, '(?m)^FROM\s+.*$', "FROM /tmp/$GgufName")
+if ($mfNuevo -eq $mfOriginal) { throw "No se pudo reescribir la linea FROM de $modelfilePath (no hay linea 'FROM ...' o ya apuntaba a /tmp/$GgufName). Se aborta antes de 'ollama create'." }
+Set-Content -Path $localModelfileCopy -Value $mfNuevo -NoNewline
+Invoke-Native docker @("cp", $localModelfileCopy, "techo360-worker-ollama:/tmp/$ModelfileName") "Fallo copiando el Modelfile al contenedor de Ollama"
+Invoke-Native docker @("exec", "techo360-worker-ollama", "ollama", "create", $OllamaModel, "-f", "/tmp/$ModelfileName") "Fallo 'ollama create' importando el modelo"
 
 # ------------------------------------------------------------
 # 7. Arrancar el worker del chatbot

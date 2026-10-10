@@ -1,0 +1,21 @@
+# Imagen del WORKER (no es el Dockerfile del chatbot, que no se toca). Mismo codigo (app/) del SHA indicado,
+# pero solo con las dependencias que ese codigo importa de verdad (requirements-worker.txt).
+# Contexto: carpeta con app/ (git archive del SHA) + este archivo + requirements-worker.txt; lo arma
+# build-worker-image.ps1.
+FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
+
+ARG CHATBOT_SHA=desconocido
+LABEL org.techo360.chatbot-sha="${CHATBOT_SHA}"
+
+WORKDIR /app
+
+COPY requirements-worker.txt .
+RUN pip install --no-cache-dir -r requirements-worker.txt
+
+COPY app ./app
+
+# Prueba de importacion en el build: si falta una dependencia, la imagen no se construye.
+RUN python -c "import app.main, app.rabbitmq_consumer; print('imports OK')"
+
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

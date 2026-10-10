@@ -36,6 +36,15 @@ services:
       - ollama_worker_data:/root/.ollama
     networks:
       - worker-net
+    # Healthcheck: el chatbot-worker espera a que Ollama responda de verdad (antes
+    # `depends_on` solo esperaba a que el contenedor existiera). `ollama list` usa la
+    # API local y no carga el modelo ni genera carga.
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
     # Sin GPU declarada aqui a proposito -- esta primera validacion
     # corre en el PC del usuario tal cual, CPU-only, igual que el VPS.
     # Si la maquina de laboratorio tiene GPU NVIDIA, agregar:
@@ -59,14 +68,33 @@ services:
       # RABBITMQ_HOST es el UNICO valor pensado para cambiar entre esta
       # prueba (IP de Tailscale) y el despliegue final de laboratorio
       # (IP privada de la universidad, cuando RabbitMQ escuche ahi).
-      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@${RABBITMQ_HOST}:${RABBITMQ_PORT}/
+      # heartbeat=30 (aiormq lee `heartbeat` de la URL; por defecto 60 s y tolera 3
+      # latidos perdidos): detecta en ~2 min, no ~3-4, una conexion muerta tras suspender
+      # el PC o caer Tailscale (9-oct: 03:13-04:27 sin conexion). La reconexion en si es
+      # de aio-pika (connect_robust, cada 5 s).
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@${RABBITMQ_HOST}:${RABBITMQ_PORT}/?heartbeat=30
       OLLAMA_URL: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-techo360-chatbot:v3.2}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-techo360-chatbot:v${MODEL_VERSION:-3.3}}
       CHATBOT_CONSUMER_PRIORITY: ${CHATBOT_CONSUMER_PRIORITY:-10}
+      # Hilos de llama.cpp segun las CPU de esta maquina (ver README). La imagen del chatbot
+      # lo ignora hasta que incluya OLLAMA_NUM_THREAD; sin valor queda en 3.
+      OLLAMA_NUM_THREAD: ${OLLAMA_NUM_THREAD:-3}
     depends_on:
-      - ollama
+      ollama:
+        condition: service_healthy
     networks:
       - worker-net
+    # Healthcheck del proceso (el endpoint /health del chatbot). Solo informa
+    # (`docker ps` / `docker inspect`): Docker no reinicia un contenedor `unhealthy`; el
+    # reinicio ante un fallo lo da `restart: unless-stopped` cuando el proceso termina
+    # (p. ej. si RabbitMQ no esta disponible al arrancar, uvicorn aborta y Docker lo
+    # reintenta; visto el 9-oct a las 06:23).
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=5).status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     # Sin puertos publicados -- el worker no recibe HTTP, solo consume
     # de RabbitMQ (igual que el chatbot del VPS no expone puerto propio,
     # ver techo360-infra/docker-compose.yml).
