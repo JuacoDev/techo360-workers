@@ -29,7 +29,7 @@ volumes:
 
 services:
   ollama:
-    image: ollama/ollama:0.6.8
+    image: ollama/ollama:0.32.6
     container_name: techo360-worker-ollama
     restart: unless-stopped
     volumes:
