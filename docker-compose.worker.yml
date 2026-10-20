@@ -29,38 +29,31 @@ volumes:
 
 services:
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.6.8
     container_name: techo360-worker-ollama
     restart: unless-stopped
     volumes:
       - ollama_worker_data:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     networks:
       - worker-net
-    # Healthcheck: el chatbot-worker espera a que Ollama responda de verdad (antes
-    # `depends_on` solo esperaba a que el contenedor existiera). `ollama list` usa la
-    # API local y no carga el modelo ni genera carga.
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 15s
       timeout: 10s
       retries: 5
       start_period: 20s
-    # Sin GPU declarada aqui a proposito -- esta primera validacion
-    # corre en el PC del usuario tal cual, CPU-only, igual que el VPS.
-    # Si la maquina de laboratorio tiene GPU NVIDIA, agregar:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
 
   chatbot-worker:
-    build:
-      # Contexto = el repo techo360-chatbot tal cual, SIN modificar --
-      # mismo Dockerfile, mismo codigo, misma imagen que corre en el VPS.
-      context: ../techo360-chatbot
+    image: ${WORKER_IMAGE:-techo360-worker-chatbot:v0.4.1-testing}
     container_name: techo360-worker-chatbot
     restart: unless-stopped
     environment:
@@ -73,12 +66,11 @@ services:
       # el PC o caer Tailscale (9-oct: 03:13-04:27 sin conexion). La reconexion en si es
       # de aio-pika (connect_robust, cada 5 s).
       RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@${RABBITMQ_HOST}:${RABBITMQ_PORT}/?heartbeat=30
-      OLLAMA_URL: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-techo360-chatbot:v${MODEL_VERSION:-3.3}}
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-techo360-chatbot:v0.4.1}
       CHATBOT_CONSUMER_PRIORITY: ${CHATBOT_CONSUMER_PRIORITY:-10}
-      # Hilos de llama.cpp segun las CPU de esta maquina (ver README). La imagen del chatbot
-      # lo ignora hasta que incluya OLLAMA_NUM_THREAD; sin valor queda en 3.
-      OLLAMA_NUM_THREAD: ${OLLAMA_NUM_THREAD:-3}
+      OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-3072}
+      OLLAMA_NUM_THREAD: ${OLLAMA_NUM_THREAD:-4}
     depends_on:
       ollama:
         condition: service_healthy
