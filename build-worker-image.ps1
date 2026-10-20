@@ -4,14 +4,14 @@
     "lo que haya checked-out". Usa Dockerfile.worker + requirements-worker.txt (este repo).
 
 .PARAMETER ChatbotSha
-    Commit de techo360-chatbot. Por defecto ee6a733 (Testing: NUM_THREAD configurable #10 + aviso de cancelacion #11 + test del tope).
+    Commit de techo360-chatbot. Por defecto la punta de origin/Testing con soporte RPC v2 y NUM_CTX 3072.
 
 .PARAMETER Tag
     Tag de la imagen resultante.
 #>
 param(
-    [string]$ChatbotSha = "ee6a7339cff564120c1a6914f4cda7fed8651a40",
-    [string]$Tag = "techo360-worker-chatbot:v3.3-ee6a733",
+    [string]$ChatbotSha = "b6ef467d11b6008d7365889c84e051e62dc96b96",
+    [string]$Tag = "techo360-worker-chatbot:v0.4.1-testing",
     [string]$ChatbotRepo = (Join-Path (Split-Path $PSScriptRoot -Parent) "techo360-chatbot")
 )
 $ErrorActionPreference = "Stop"
