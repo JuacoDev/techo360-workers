@@ -1,6 +1,6 @@
 param(
     [string]$Gguf = (Join-Path $env:USERPROFILE 'modelos\techo360-v0.4.1\techo360-v0.4.1-Q4_K_M.gguf'),
-    [string]$Modelfile = (Join-Path (Split-Path $PSScriptRoot -Parent) 'techo360-chatbot-wt-t41\training\ollama\Modelfile.v0.4.1')
+    [string]$Modelfile = (Join-Path $env:USERPROFILE 'modelos\techo360-v0.4.1\Modelfile.v0.4.1')
 )
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
